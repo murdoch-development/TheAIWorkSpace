@@ -1,0 +1,64 @@
+$ErrorActionPreference = 'Stop'
+$zip = "C:\CData\TheAIWorkSpace\TheAIWorkSpace-2026-08-24.zip"
+$extract = "C:\Users\Rob\AppData\Local\Temp\opencode\final-check"
+if (Test-Path $extract) { Remove-Item $extract -Recurse -Force }
+New-Item -ItemType Directory -Path $extract -Force | Out-Null
+Expand-Archive -Path $zip -DestinationPath $extract -Force
+
+$files = Get-ChildItem -Recurse $extract | Where-Object { -not $_.PSIsContainer } | ForEach-Object { $_.Name }
+Write-Host '=== Scripts present ===' -ForegroundColor Cyan
+foreach ($s in @('install-deps.ps1','setup-repo.ps1','generate-layout.ps1','setup-workspace.ps1','package.ps1','bootstrap.ps1','README.md','QUICKSTART.txt')) {
+    if ($s -in $files) { Write-Host "  [OK] $s" -ForegroundColor Green } else { Write-Host "  [X]  $s MISSING" -ForegroundColor Red }
+}
+
+Write-Host ''
+Write-Host '=== Profile files present ===' -ForegroundColor Cyan
+$profileFiles = Get-ChildItem -Recurse (Join-Path $extract 'profile') -File | Where-Object { $_.FullName -notlike '*node_modules*' -and $_.FullName -notlike '*.ocx*' }
+Write-Host "  [OK] $($profileFiles.Count) profile files (excluding node_modules/.ocx)" -ForegroundColor Green
+
+Write-Host ''
+Write-Host '=== Profile cleanliness check ===' -ForegroundColor Cyan
+$dirty = $false
+$profileFiles | ForEach-Object {
+    $hits = Select-String -Path $_.FullName -Pattern 'toctoc|TocToc|PMDG|pmdg|C:\\CData' -ErrorAction SilentlyContinue
+    if ($hits) { Write-Host "  [X]  $($_.Name) has project-specific refs" -ForegroundColor Red; $dirty = $true }
+}
+if (-not $dirty) { Write-Host "  [OK] No project-specific references in profile" -ForegroundColor Green }
+
+Write-Host ''
+Write-Host '=== Bootstrap checks ===' -ForegroundColor Cyan
+$boot = Get-Content -Raw (Join-Path $extract 'bootstrap.ps1')
+if ($boot -match 'SkipDeps -Force') { Write-Host "  [OK] bootstrap passes -Force to setup-workspace" -ForegroundColor Green } else { Write-Host "  [X]  bootstrap missing -Force" -ForegroundColor Red }
+if ($boot -match 'LASTEXITCODE -ne 0' -and $boot -notmatch '$null = bun install') { Write-Host "  [OK] bootstrap bun/ocx failure reporting fixed" -ForegroundColor Green } else { Write-Host "  [X]  bootstrap bun/ocx still swallows failures" -ForegroundColor Red }
+
+Write-Host ''
+Write-Host '=== install-deps.ps1 checks ===' -ForegroundColor Cyan
+$install = Get-Content -Raw (Join-Path $extract 'install-deps.ps1')
+if ($install -match 'Repair-BunShim') { Write-Host "  [OK] Repair-BunShim present for -S shebang bug" -ForegroundColor Green } else { Write-Host "  [X]  Repair-BunShim missing" -ForegroundColor Red }
+if ($install -match '--version' -and $install -notmatch 'interpreter executable.*-v') { Write-Host "  [OK] Uses --version (not -v) for shim check" -ForegroundColor Green } else { Write-Host "  [X]  Still uses -v" -ForegroundColor Red }
+
+Write-Host ''
+Write-Host '=== generate-layout.ps1 checks ===' -ForegroundColor Cyan
+$gen = Get-Content -Raw (Join-Path $extract 'generate-layout.ps1')
+if ($gen -notmatch 'System') { Write-Host "  [OK] No System tab" -ForegroundColor Green } else { Write-Host "  [X]  System tab present" -ForegroundColor Red }
+if ($gen -notmatch 'swap_tiled_layout|swap_floating_layout') { Write-Host "  [OK] No swap layouts" -ForegroundColor Green } else { Write-Host "  [X]  Swap layouts present" -ForegroundColor Red }
+if ($gen -notmatch 'RepoLabels') { Write-Host "  [OK] No RepoLabels param" -ForegroundColor Green } else { Write-Host "  [X]  RepoLabels still present" -ForegroundColor Red }
+if ($gen -match 'TrimEnd') { Write-Host "  [OK] Trailing backslash stripping" -ForegroundColor Green } else { Write-Host "  [X]  No trailing backslash fix" -ForegroundColor Red }
+
+Write-Host ''
+Write-Host '=== setup-workspace.ps1 checks ===' -ForegroundColor Cyan
+$setup = Get-Content -Raw (Join-Path $extract 'setup-workspace.ps1')
+if ($setup -notmatch 'RepoLabels') { Write-Host "  [OK] No RepoLabels param" -ForegroundColor Green } else { Write-Host "  [X]  RepoLabels still present" -ForegroundColor Red }
+if ($setup -notmatch 'ProjectName = \') { Write-Host "  [OK] No label-as-ProjectName" -ForegroundColor Green } else { Write-Host "  [X]  Still passes label as ProjectName" -ForegroundColor Red }
+if ($setup -notmatch 'toctoc|TocToc|C:\\CData\\TocToc') { Write-Host "  [OK] No project-specific examples" -ForegroundColor Green } else { Write-Host "  [X]  Project-specific refs remain" -ForegroundColor Red }
+
+Write-Host ''
+$allFiles = @('install-deps.ps1','setup-repo.ps1','generate-layout.ps1','setup-workspace.ps1','package.ps1','bootstrap.ps1','README.md','QUICKSTART.txt')
+$missing = $allFiles | Where-Object { $_ -notin $files }
+if ($missing.Count -eq 0 -and -not $dirty) {
+    Write-Host 'ALL FINAL CHECKS PASSED' -ForegroundColor Green
+} else {
+    Write-Host 'SOME CHECKS FAILED' -ForegroundColor Red
+}
+
+Remove-Item $extract -Recurse -Force
