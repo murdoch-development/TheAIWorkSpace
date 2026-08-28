@@ -4,9 +4,9 @@
 
 .DESCRIPTION
     Creates a .kdl layout file with:
-    - Plan tab (Plan-WS agent, in the chosen Plan repo)
+    - Plan tab (Plan-WS agent, in the chosen Plan dir)
     - One Build tab + one Board tab + one Merge tab per repo (indexed: Build 1, Board 1, Merge 1, ...)
-    - Shell tab (plain shell, in the chosen Plan repo)
+    - Shell tab (plain shell, in the chosen Plan dir)
     - new_tab_template
 
     Works with any number of repos. Each repo gets its own Build, Board, and Merge
@@ -22,10 +22,11 @@
 .PARAMETER ProfileName
     OpenCode profile to use in the layout. Defaults to "ws".
 
-.PARAMETER PlanRepoIndex
-    0-based index into $Repos for the repo that Plan-WS (and the Shell tab, and
-    the layout cwd) should run in. Defaults to 0 (first repo). Only meaningful
-    with multiple repos; setup-workspace.ps1 prompts for it in that case.
+.PARAMETER PlanDir
+    Directory that Plan-WS (and the Shell tab, and the layout cwd) should run in.
+    May be any folder path — not limited to one of the $Repos. Defaults to the
+    first repo ($Repos[0]) when not provided. setup-workspace.ps1 prompts for it
+    only when multiple repos are given.
 
 .PARAMETER Force
     Overwrite existing layout without prompting.
@@ -44,7 +45,7 @@ param(
     [string]$ProfileName = "ws",
 
     [Parameter(Mandatory=$false)]
-    [int]$PlanRepoIndex = 0,
+    [string]$PlanDir = "",
 
     [switch]$Force
 )
@@ -134,8 +135,9 @@ for ($i = 0; $i -lt $Repos.Count; $i++) {
     }
 }
 
-if ($PlanRepoIndex -lt 0 -or $PlanRepoIndex -ge $Repos.Count) {
-    Write-Error "PlanRepoIndex ($PlanRepoIndex) is out of range. Repos has $($Repos.Count) entries (valid: 0-$($Repos.Count - 1))."
+if (-not $PlanDir) { $PlanDir = $Repos[0] }
+if (-not (Test-Path $PlanDir)) {
+    Write-Error "Plan dir path does not exist: $PlanDir"
     exit 1
 }
 
@@ -159,17 +161,17 @@ if (Test-Path $DestLayout) {
 
 # === Build layout ===
 
-$planRepoPath = Normalize-PathForKdl $Repos[$PlanRepoIndex]
+$planDirPath = Normalize-PathForKdl $PlanDir
 
 $L = [System.Collections.Generic.List[string]]::new()
 
 $L.Add("layout {")
-$L.Add("    cwd `"$planRepoPath`"")
+$L.Add("    cwd `"$planDirPath`"")
 
-# Tab: Plan (focus on open) — runs in the chosen Plan repo's dir (where its board lives)
+# Tab: Plan (focus on open) — runs in the chosen Plan dir (where Plan-WS lives)
 $L.Add("    tab name=`"Plan`" focus=true hide_floating_panes=true {")
 $L.AddRange([string[]](Get-TabBarBlock))
-$L.AddRange([string[]](Get-PaneBlock -Cwd $planRepoPath -CommandArgs @("ocx", "oc", "-p", $ProfileName, "--agent", "Plan-WS")))
+$L.AddRange([string[]](Get-PaneBlock -Cwd $planDirPath -CommandArgs @("ocx", "oc", "-p", $ProfileName, "--agent", "Plan-WS")))
 $L.AddRange([string[]](Get-StatusBarBlock))
 $L.Add("    }")
 
@@ -200,10 +202,10 @@ for ($i = 0; $i -lt $Repos.Count; $i++) {
     $L.Add("    }")
 }
 
-# Tab: Shell (in Plan repo's dir)
+# Tab: Shell (in Plan dir)
 $L.Add("    tab name=`"Shell`" hide_floating_panes=true {")
 $L.AddRange([string[]](Get-TabBarBlock))
-$L.Add("        pane cwd=`"$planRepoPath`"")
+$L.Add("        pane cwd=`"$planDirPath`"")
 $L.AddRange([string[]](Get-StatusBarBlock))
 $L.Add("    }")
 

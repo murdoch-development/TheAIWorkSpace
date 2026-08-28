@@ -23,10 +23,11 @@
 .PARAMETER ProfileName
     OpenCode profile to use. Defaults to "ws" (the shared workspace profile).
 
-.PARAMETER PlanRepoIndex
-    0-based index into $Repos for the repo that Plan-WS (and the Shell tab) should
-    run in. Defaults to -1: with multiple repos the script prompts; with a single
-    repo it uses that repo (index 0).
+.PARAMETER PlanDir
+    Folder path where Plan-WS (and the Shell tab) should run. Need not be a repo —
+    any existing folder is accepted. Defaults to empty: with a single repo it uses
+    that repo; with multiple repos the script prompts (accept a listed number or a
+    custom folder path).
 
 .PARAMETER SkipDeps
     Skip dependency installation (assume already installed).
@@ -60,7 +61,7 @@ param(
     [string]$ProfileName = "ws",
 
     [Parameter(Mandatory=$false)]
-    [int]$PlanRepoIndex = -1,
+    [string]$PlanDir = "",
 
     [switch]$SkipDeps,
 
@@ -137,36 +138,51 @@ if (-not $Repos -or $Repos.Count -eq 0) {
     }
 }
 
-# === Choose Plan-WS base repo (only meaningful with multiple repos) ===
+# === Resolve Plan dir (only prompted when multiple repos) ===
 
 if ($Repos.Count -eq 1) {
-    $PlanRepoIndex = 0
-} elseif ($PlanRepoIndex -lt 0) {
+    $PlanDir = $Repos[0]
+} elseif (-not $PlanDir) {
     Write-Host ""
-    Write-Host "    Which repo should Plan-WS run in? (Shell tab follows it)" -ForegroundColor White
+    Write-Host "    Which folder should Plan-WS run in? (Shell tab follows it)" -ForegroundColor White
+    Write-Host "    This can be a repo below or any other existing folder." -ForegroundColor DarkGray
     for ($i = 0; $i -lt $Repos.Count; $i++) {
         $n = $i + 1
         Write-Host "      $n. $($Repos[$i])" -ForegroundColor Gray
     }
-    Write-Host "    Enter 1-$($Repos.Count) [default 1]: " -ForegroundColor Cyan -NoNewline
-    $choice = Read-Host
-    if (-not $choice) { $choice = "1" }
-    $chosen = 0
-    if (-not [int]::TryParse($choice, [ref]$chosen)) {
-        Write-Error "Invalid selection: '$choice'. Enter a number 1-$($Repos.Count)."
-        exit 1
-    }
-    $PlanRepoIndex = $chosen - 1
-    if ($PlanRepoIndex -lt 0 -or $PlanRepoIndex -ge $Repos.Count) {
-        Write-Error "Selection out of range: $choice (valid 1-$($Repos.Count))."
-        exit 1
+    while ($true) {
+        Write-Host "    Enter a number 1-$($Repos.Count), or a folder path [default 1]: " -ForegroundColor Cyan -NoNewline
+        $choice = Read-Host
+        if (-not $choice) { $choice = "1" }
+        $chosen = 0
+        if ([int]::TryParse($choice, [ref]$chosen)) {
+            $idx = $chosen - 1
+            if ($idx -ge 0 -and $idx -lt $Repos.Count) {
+                $PlanDir = $Repos[$idx]
+                break
+            }
+            Write-Host "      [X] Number out of range (valid 1-$($Repos.Count))." -ForegroundColor Red
+            continue
+        }
+        $candidate = $choice
+        if ($candidate -eq "~") { $candidate = $HOME }
+        elseif ($candidate -like "~/*" -or $candidate -like "~\*") { $candidate = Join-Path $HOME $candidate.Substring(2) }
+        if (Test-Path $candidate) {
+            $PlanDir = $candidate
+            break
+        }
+        Write-Host "      [X] Path does not exist: $candidate" -ForegroundColor Red
     }
 } else {
-    # Explicitly passed via param - validate range
-    if ($PlanRepoIndex -lt 0 -or $PlanRepoIndex -ge $Repos.Count) {
-        Write-Error "PlanRepoIndex ($PlanRepoIndex) is out of range for $($Repos.Count) repo(s)."
+    # Explicitly passed via param - validate it exists (with ~ expansion)
+    $candidate = $PlanDir
+    if ($candidate -eq "~") { $candidate = $HOME }
+    elseif ($candidate -like "~/*" -or $candidate -like "~\*") { $candidate = Join-Path $HOME $candidate.Substring(2) }
+    if (-not (Test-Path $candidate)) {
+        Write-Error "PlanDir does not exist: $candidate"
         exit 1
     }
+    $PlanDir = $candidate
 }
 
 # === Summary ===
@@ -180,7 +196,7 @@ Write-Host "      Repos:    $($Repos.Count)" -ForegroundColor Gray
 foreach ($repo in $Repos) {
     Write-Host "        $($repo)" -ForegroundColor DarkGray
 }
-Write-Host "      Plan repo: $($Repos[$PlanRepoIndex])" -ForegroundColor Gray
+Write-Host "      Plan dir:  $PlanDir" -ForegroundColor Gray
 if ($SkipDeps) {
     Write-Host "      Deps:     SKIPPED" -ForegroundColor Gray
 } else {
@@ -233,7 +249,7 @@ $layoutArgs = @{
     LayoutName = $LayoutName
     Repos = $Repos
     ProfileName = $ProfileName
-    PlanRepoIndex = $PlanRepoIndex
+    PlanDir = $PlanDir
 }
 if ($Force) { $layoutArgs["Force"] = $true }
 & $GenerateLayoutScript @layoutArgs
