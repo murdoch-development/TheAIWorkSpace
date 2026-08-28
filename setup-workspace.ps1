@@ -23,6 +23,11 @@
 .PARAMETER ProfileName
     OpenCode profile to use. Defaults to "ws" (the shared workspace profile).
 
+.PARAMETER PlanRepoIndex
+    0-based index into $Repos for the repo that Plan-WS (and the Shell tab) should
+    run in. Defaults to -1: with multiple repos the script prompts; with a single
+    repo it uses that repo (index 0).
+
 .PARAMETER SkipDeps
     Skip dependency installation (assume already installed).
 
@@ -53,6 +58,9 @@ param(
 
     [Parameter(Mandatory=$false)]
     [string]$ProfileName = "ws",
+
+    [Parameter(Mandatory=$false)]
+    [int]$PlanRepoIndex = -1,
 
     [switch]$SkipDeps,
 
@@ -129,6 +137,38 @@ if (-not $Repos -or $Repos.Count -eq 0) {
     }
 }
 
+# === Choose Plan-WS base repo (only meaningful with multiple repos) ===
+
+if ($Repos.Count -eq 1) {
+    $PlanRepoIndex = 0
+} elseif ($PlanRepoIndex -lt 0) {
+    Write-Host ""
+    Write-Host "    Which repo should Plan-WS run in? (Shell tab follows it)" -ForegroundColor White
+    for ($i = 0; $i -lt $Repos.Count; $i++) {
+        $n = $i + 1
+        Write-Host "      $n. $($Repos[$i])" -ForegroundColor Gray
+    }
+    Write-Host "    Enter 1-$($Repos.Count) [default 1]: " -ForegroundColor Cyan -NoNewline
+    $choice = Read-Host
+    if (-not $choice) { $choice = "1" }
+    $chosen = 0
+    if (-not [int]::TryParse($choice, [ref]$chosen)) {
+        Write-Error "Invalid selection: '$choice'. Enter a number 1-$($Repos.Count)."
+        exit 1
+    }
+    $PlanRepoIndex = $chosen - 1
+    if ($PlanRepoIndex -lt 0 -or $PlanRepoIndex -ge $Repos.Count) {
+        Write-Error "Selection out of range: $choice (valid 1-$($Repos.Count))."
+        exit 1
+    }
+} else {
+    # Explicitly passed via param - validate range
+    if ($PlanRepoIndex -lt 0 -or $PlanRepoIndex -ge $Repos.Count) {
+        Write-Error "PlanRepoIndex ($PlanRepoIndex) is out of range for $($Repos.Count) repo(s)."
+        exit 1
+    }
+}
+
 # === Summary ===
 
 Write-Host ""
@@ -140,6 +180,7 @@ Write-Host "      Repos:    $($Repos.Count)" -ForegroundColor Gray
 foreach ($repo in $Repos) {
     Write-Host "        $($repo)" -ForegroundColor DarkGray
 }
+Write-Host "      Plan repo: $($Repos[$PlanRepoIndex])" -ForegroundColor Gray
 if ($SkipDeps) {
     Write-Host "      Deps:     SKIPPED" -ForegroundColor Gray
 } else {
@@ -192,6 +233,7 @@ $layoutArgs = @{
     LayoutName = $LayoutName
     Repos = $Repos
     ProfileName = $ProfileName
+    PlanRepoIndex = $PlanRepoIndex
 }
 if ($Force) { $layoutArgs["Force"] = $true }
 & $GenerateLayoutScript @layoutArgs
@@ -216,4 +258,5 @@ Write-Host ""
 Write-Host "  3. Agents available (oc -p $ProfileName):" -ForegroundColor White
 Write-Host "     /agent Plan-WS    -> creates tasks" -ForegroundColor DarkGray
 Write-Host "     /agent Build-WS   -> orchestrates builds" -ForegroundColor DarkGray
+Write-Host "     /agent Merger-WS  -> merges tasks" -ForegroundColor DarkGray
 Write-Host ""

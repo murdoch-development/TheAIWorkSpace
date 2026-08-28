@@ -107,7 +107,10 @@ Write-Host "TASK_STARTED: $TaskId"
 Write-Host "STATUS: In Progress"
 '@
     "create-worktree.ps1" = @'
-param([Parameter(Mandatory=$true, Position=0)][string]$TaskId)
+param(
+    [Parameter(Mandatory=$true, Position=0)][string]$TaskId,
+    [switch]$Background
+)
 $ErrorActionPreference = "Stop"
 if (-not (Get-Command backlog -ErrorAction SilentlyContinue)) {
     Write-Error "Backlog.md CLI not found. Run install-deps.ps1 first."; exit 1
@@ -125,6 +128,93 @@ $BranchName = $TaskId
 $WorktreesDir = Join-Path $RepoRoot "backlog" "worktrees"
 if (-not (Test-Path $WorktreesDir)) { New-Item -ItemType Directory -Path $WorktreesDir -Force | Out-Null }
 $GitDirTarget = Join-Path $RepoRoot ".git" "worktrees" $TaskId
+$PendingFile = Join-Path $WorktreesDir "$TaskId.pending"
+$ErrorFile = Join-Path $WorktreesDir "$TaskId.error"
+
+# === Background mode: create worktree detached ===
+if ($Background) {
+    try {
+        $currentBranch = git branch --show-current 2>$null
+        if (-not $currentBranch) { $currentBranch = "main" }
+
+        git worktree add $WorktreePath -b $BranchName 2>&1 | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw "git worktree add failed (exit $LASTEXITCODE)" }
+
+        Push-Location $WorktreePath
+        try { $status = git status --porcelain 2>$null } finally { Pop-Location }
+        if ($status) {
+            $missingCount = ($status | Where-Object { $_ } | Measure-Object).Count
+            throw "Checkout incomplete - $missingCount files missing"
+        }
+
+        $wtBlock = "`n`n<!-- WORKTREE_START -->`n## Worktree`n- Path: ``$WorktreePath```n- Branch: ``$BranchName```n- MergeTarget: ``$currentBranch```n<!-- WORKTREE_END -->"
+        backlog task edit $TaskId --comment $wtBlock --comment-author 'system' 2>$null
+
+        $readyContent = "WORKTREE_PATH: $WorktreePath`nBRANCH: $BranchName`nMERGE_TARGET: $currentBranch`nCREATED_AT: $(Get-Date -Format 'o')"
+        Set-Content -LiteralPath (Join-Path $WorktreePath ".ready") -Value $readyContent -NoNewline
+
+        Remove-Item $PendingFile -Force -ErrorAction SilentlyContinue
+    } catch {
+        Set-Content -LiteralPath $ErrorFile -Value $_.Exception.Message -NoNewline
+        git worktree remove $WorktreePath --force 2>$null
+        if (Test-Path $WorktreePath) { Remove-Item $WorktreePath -Recurse -Force -ErrorAction SilentlyContinue }
+        git branch -D $BranchName 2>$null
+        Remove-Item $PendingFile -Force -ErrorAction SilentlyContinue
+    }
+    exit 0
+}
+
+# === Check background process state ===
+if (Test-Path $PendingFile) {
+    $pendingContent = Get-Content $PendingFile -Raw
+    $pendingLines = $pendingContent -split "`n"
+    $bgPid = 0
+    if ($pendingLines[0] -match '^\d+$') { $bgPid = [int]$pendingLines[0] }
+
+    $deadline = (Get-Date).AddSeconds(100)
+    while ((Get-Date) -lt $deadline) {
+        if (Test-Path (Join-Path $WorktreePath ".ready")) {
+            Remove-Item $PendingFile -Force -ErrorAction SilentlyContinue
+            $readyContent = Get-Content (Join-Path $WorktreePath ".ready") -Raw
+            Write-Host "STATUS: ready"
+            Write-Host $readyContent
+            exit 0
+        }
+        if (Test-Path $ErrorFile) {
+            $errorMsg = Get-Content $ErrorFile -Raw
+            Remove-Item $PendingFile -Force -ErrorAction SilentlyContinue
+            Remove-Item $ErrorFile -Force -ErrorAction SilentlyContinue
+            Write-Host "STATUS: error"
+            Write-Host $errorMsg
+            exit 1
+        }
+        if ($bgPid -gt 0) {
+            $bgProc = Get-Process -Id $bgPid -ErrorAction SilentlyContinue
+            if (-not $bgProc) {
+                Remove-Item $PendingFile -Force -ErrorAction SilentlyContinue
+                git worktree remove $WorktreePath --force 2>$null
+                if (Test-Path $WorktreePath) { Remove-Item $WorktreePath -Recurse -Force -ErrorAction SilentlyContinue }
+                git branch -D $BranchName 2>$null
+                Write-Host "STATUS: error"
+                Write-Host "Background process died unexpectedly."
+                exit 1
+            }
+        }
+        Start-Sleep -Seconds 5
+    }
+    Write-Host "STATUS: still_creating"
+    Write-Host "The background checkout is still running. Call this script again to wait for completion."
+    exit 0
+}
+
+# === Check for error from previous attempt ===
+if (Test-Path $ErrorFile) {
+    $errorMsg = Get-Content $ErrorFile -Raw
+    Remove-Item $ErrorFile -Force -ErrorAction SilentlyContinue
+    Write-Host "STATUS: error"
+    Write-Host $errorMsg
+    exit 1
+}
 
 # === Validate existing worktree (deterministic 4-point check) ===
 if (Test-Path $WorktreePath) {
@@ -140,6 +230,7 @@ if (Test-Path $WorktreePath) {
 
     if ($structurallyValid -and $readyExists) {
         # Fully valid worktree (new-style) — skip
+        Write-Host "STATUS: ready"
         Write-Host "Worktree already exists and is valid at $WorktreePath" -ForegroundColor Yellow
         Write-Host ""
         Write-Host "WORKTREE_PATH: $WorktreePath"
@@ -169,7 +260,7 @@ if (Test-Path $WorktreePath) {
                 $branches = git branch --contains $parentCommit 2>$null
                 if ($branches) {
                     # Parse branch names (strip leading * and whitespace)
-                    $branchNames = $branches | ForEach-Object { ($_.Trim() -replace '^\* ', '') } | Where-Object { $_ -ne $BranchName -and $_ -ne 'HEAD' }
+                    $branchNames = $branches | ForEach-Object { ($_.Trim() -replace '^[*+]\s*', '') } | Where-Object { $_ -ne $BranchName -and $_ -ne 'HEAD' }
                     $mergeTargetBranch = $branchNames | Select-Object -First 1
                 }
             }
@@ -207,6 +298,7 @@ if (Test-Path $WorktreePath) {
         Set-Content -LiteralPath $readyFile -Value $readyContent -NoNewline
         Write-Host "  Ready signal written (legacy repair)." -ForegroundColor Green
 
+        Write-Host "STATUS: ready"
         Write-Host ""
         Write-Host "WORKTREE_PATH: $WorktreePath"
         Write-Host "BRANCH: $BranchName"
@@ -242,57 +334,23 @@ if (Test-Path $WorktreePath) {
     Write-Host "  Cleanup complete. Creating fresh worktree..." -ForegroundColor DarkGray
 }
 
-# === Create worktree ===
+# === Launch background worktree creation ===
 $dirty = git status --porcelain 2>$null
 if ($dirty) { Write-Warning "Current branch has uncommitted changes. Worktree will be created from the last commit." }
-$currentBranch = git branch --show-current 2>$null
-if (-not $currentBranch) { $currentBranch = "main" }
 
-Write-Host "Creating worktree for $TaskId on branch $BranchName..." -ForegroundColor Cyan
-git worktree add $WorktreePath -b $BranchName
-if ($LASTEXITCODE -ne 0) { Write-Error "Failed to create worktree at $WorktreePath"; exit 1 }
-Write-Host "Created worktree: $WorktreePath" -ForegroundColor Green
+Set-Content -LiteralPath $PendingFile -Value "pending`n$((Get-Date -Format 'o'))" -NoNewline
 
-# === Verify checkout is complete ===
-Write-Host "Verifying checkout..." -ForegroundColor Cyan
-Push-Location $WorktreePath
-try {
-    $status = git status --porcelain 2>$null
-} finally {
-    Pop-Location
-}
+$scriptPath = $MyInvocation.MyCommand.Path
+$pwshPath = (Get-Process -Id $PID).Path
+if (-not $pwshPath) { $pwshPath = "pwsh" }
 
-if ($status) {
-    $missingCount = ($status | Where-Object { $_ } | Measure-Object).Count
-    Write-Host "Checkout incomplete — $missingCount files missing. Cleaning up..." -ForegroundColor Red
-    git worktree remove $WorktreePath --force 2>$null
-    if (Test-Path $WorktreePath) { Remove-Item $WorktreePath -Recurse -Force -ErrorAction SilentlyContinue }
-    git branch -D $BranchName 2>$null
-    Write-Error "Worktree checkout incomplete ($missingCount files missing). The repo may be too large or the process was interrupted. Retry or check disk space."
-    exit 1
-}
-Write-Host "Checkout verified — all files present." -ForegroundColor Green
+$bgProc = Start-Process -FilePath $pwshPath -ArgumentList "-NoProfile -File `"$scriptPath`" -TaskId $TaskId -Background" -WorkingDirectory $RepoRoot -WindowStyle Hidden -PassThru
 
-# === Write worktree ref to ticket ===
-$worktreeBlock = "`n`n<!-- WORKTREE_START -->`n## Worktree`n- Path: ``$WorktreePath```n- Branch: ``$BranchName```n- MergeTarget: ``$currentBranch```n<!-- WORKTREE_END -->"
-backlog task edit $TaskId --comment $worktreeBlock --comment-author "system" 2>$null
-if ($LASTEXITCODE -eq 0) {
-    Write-Host "Worktree reference written to ticket $TaskId" -ForegroundColor Green
-} else {
-    Write-Warning "Failed to write worktree reference to ticket (non-fatal)."
-}
+Set-Content -LiteralPath $PendingFile -Value "$($bgProc.Id)`n$((Get-Date -Format 'o'))" -NoNewline
 
-# === Write .ready signal file (deterministic callback for the agent) ===
-$readyFile = Join-Path $WorktreePath ".ready"
-$readyContent = "WORKTREE_PATH: $WorktreePath`nBRANCH: $BranchName`nMERGE_TARGET: $currentBranch`nCREATED_AT: $(Get-Date -Format 'o')"
-Set-Content -LiteralPath $readyFile -Value $readyContent -NoNewline
-Write-Host "Ready signal written." -ForegroundColor Green
-
-Write-Host ""
-Write-Host "WORKTREE_PATH: $WorktreePath"
-Write-Host "BRANCH: $BranchName"
-Write-Host "MERGE_TARGET: $currentBranch"
-Write-Host "READY: true"
+Write-Host "STATUS: creating"
+Write-Host "Background checkout started (PID $($bgProc.Id)). Call this script again to wait for completion."
+exit 0
 '@
     "complete-task.ps1" = @'
 param([Parameter(Mandatory=$true, Position=0)][string]$TaskId)
@@ -349,7 +407,8 @@ param(
     [Parameter(Mandatory=$true, Position=0)][string]$TaskId,
     [Parameter(Mandatory=$false)]
     [ValidateSet("no-ff", "squash")]
-    [string]$Strategy = "no-ff"
+    [string]$Strategy = "no-ff",
+    [Parameter(Mandatory=$false)][string]$Message
 )
 $ErrorActionPreference = "Stop"
 if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
@@ -369,7 +428,8 @@ if ($taskText -match 'MergeTarget:\s*`([^`]+)`') {
 if (-not $mergeTarget) {
     Write-Error "Cannot determine merge target from ticket. The WORKTREE block is missing or malformed. Run create-worktree.ps1 to repair the ticket metadata."; exit 2
 }
-if (-not (git show-ref --verify --quiet "refs/heads/$BranchName" 2>$null)) {
+$null = git show-ref --verify --quiet "refs/heads/$BranchName" 2>$null
+if ($LASTEXITCODE -ne 0) {
     Write-Error "Branch $BranchName does not exist."; exit 2
 }
 $currentBranch = git branch --show-current 2>$null
@@ -391,6 +451,18 @@ if ($deletedCount -gt 50) {
     exit 2
 }
 Write-Host "Diff sanity check passed ($deletedCount files would be deleted, threshold: 50)." -ForegroundColor Green
+
+# === Resolve commit message ===
+if (-not $Message) {
+    $taskTitle = ""
+    if ($taskText -match "Title:\s*(.+)") { $taskTitle = $Matches[1].Trim() }
+    if ($taskTitle) {
+        $Message = "$taskTitle`n`nMerge $TaskId into $mergeTarget"
+    } else {
+        $Message = "Merge $TaskId into $mergeTarget"
+    }
+}
+
 Write-Host "Merging $BranchName into $mergeTarget ($Strategy)..." -ForegroundColor Cyan
 if ($Strategy -eq "squash") {
     git merge --squash $BranchName 2>&1
@@ -402,11 +474,17 @@ if ($Strategy -eq "squash") {
         }
         Write-Error "Merge failed."; exit 2
     }
-    Write-Host "Squash staged. Commit with: git commit -m `"<message> (task-id)`"" -ForegroundColor Green
-    Write-Host "MERGE_RESULT: squash-staged"
+    git commit -m $Message 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        Write-Error "Squash commit failed."; exit 2
+    }
+    $commitHash = git rev-parse --short HEAD 2>$null
+    Write-Host "Squash committed: $commitHash" -ForegroundColor Green
+    Write-Host "MERGE_RESULT: success"
+    Write-Host "COMMIT: $commitHash"
     exit 0
 } else {
-    git merge --no-ff $BranchName -m "Merge $TaskId into $mergeTarget" 2>&1
+    git merge --no-ff $BranchName -m $Message 2>&1
     if ($LASTEXITCODE -ne 0) {
         $conflicts = git diff --name-only --diff-filter=U 2>$null
         if ($conflicts) {
@@ -415,8 +493,10 @@ if ($Strategy -eq "squash") {
         }
         Write-Error "Merge failed."; exit 2
     }
-    Write-Host "Merge successful." -ForegroundColor Green
+    $commitHash = git rev-parse --short HEAD 2>$null
+    Write-Host "Merge successful: $commitHash" -ForegroundColor Green
     Write-Host "MERGE_RESULT: success"
+    Write-Host "COMMIT: $commitHash"
     exit 0
 }
 '@
@@ -463,7 +543,8 @@ if (Test-Path $WorktreePath) {
 } else {
     Write-Host "Worktree not found (already removed?): $WorktreePath" -ForegroundColor DarkGray
 }
-if (git show-ref --verify --quiet "refs/heads/$BranchName" 2>$null) {
+$null = git show-ref --verify --quiet "refs/heads/$BranchName" 2>$null
+if ($LASTEXITCODE -eq 0) {
     git branch -d $BranchName 2>$null
     if ($LASTEXITCODE -ne 0) {
         git branch -D $BranchName 2>$null

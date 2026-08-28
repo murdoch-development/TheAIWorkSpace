@@ -1,0 +1,361 @@
+{
+	"$schema": "https://opencode.ai/config.json",
+	// Free OpenCode Zen models - no API keys required
+	"model": "opencode/big-pickle",
+	"small_model": "openrouter/xiaomi/mimo-v2.5-pro",
+
+	"agent": {
+		// Task creator for Backlog.md
+		"Plan-WS": {
+			"model": "openrouter/z-ai/glm-5.2",
+			"temperature": 0.3,
+			"reasoningEffort": "high",
+			"textVerbosity": "low",
+			"prompt": "{file:./prompts/plan-ws.md}",
+			"permission": {
+				"edit": "deny",
+				"write": "deny",
+				"question": "allow",
+				"bash": {
+					"*": "deny",
+					"backlog *": "allow",
+					"./scripts/check-board.ps1*": "allow"
+				},
+				"context7_*": "allow",
+				"exa_*": "allow",
+				"gh_grep_*": "allow"
+			}
+		},
+		// Build orchestrator for Backlog.md
+		"Build-WS": {
+			"model": "openrouter/z-ai/glm-5.2",
+			"temperature": 0.3,
+			"reasoningEffort": "medium",
+			"textVerbosity": "low",
+			"prompt": "{file:./prompts/build-ws.md}",
+			"permission": {
+				"edit": "deny",
+				"write": "deny",
+				"bash": {
+					"*": "deny",
+					"./scripts/check-board*": "allow",
+					"./scripts/start-task*": "allow",
+					"./scripts/create-worktree*": "allow",
+					"./scripts/approve-task*": "allow",
+					"./scripts/reject-task*": "allow",
+					"./scripts/read-verdict*": "allow",
+					"backlog task list*": "allow",
+					"backlog task view*": "allow",
+					"backlog instructions*": "allow",
+					"backlog search*": "allow"
+				},
+				"task": "allow",
+				"context7_*": "allow",
+				"exa_*": "allow",
+				"gh_grep_*": "allow"
+			}
+		},
+		// Implementation
+		"coder": {
+			"model": "openrouter/xiaomi/mimo-v2.5-pro",
+			"temperature": 0.2,
+			"reasoningEffort": "high",
+			"textVerbosity": "low",
+			"mode": "subagent",
+			"prompt": "{file:./prompts/coder.md}",
+			"permission": {
+				"context7_*": "deny",
+				"exa_*": "deny",
+				"gh_grep_*": "deny",
+				"read": "allow",
+				"write": "allow",
+				"edit": "allow",
+				"glob": "allow",
+				"grep": "allow",
+				"bash": {
+					"*": "allow",
+					"backlog task edit* -s *": "deny",
+					"backlog task edit* --status*": "deny",
+					"backlog task delete*": "deny",
+					"backlog task create*": "deny",
+					"backlog milestone*": "deny",
+					"backlog decision*": "deny",
+					"backlog doc*": "deny",
+					"git push*": "deny",
+					"git rebase*": "deny",
+					"git commit --amend*": "deny",
+					"git filter-branch*": "deny",
+					"git reflog*": "deny",
+					"git gc*": "deny",
+					"git clean*": "deny",
+					"git stash*": "deny",
+					"git merge*": "deny",
+					"git cherry-pick*": "deny",
+					"git tag*": "deny",
+					"git remote*": "deny",
+					"git fetch*": "deny",
+					"git pull*": "deny",
+					"git checkout*": "deny",
+					"git worktree*": "deny",
+					"git branch -d*": "deny",
+					"git branch --delete*": "deny",
+					"git reset --hard*": "deny",
+					"rm -rf*": "deny",
+					"Remove-Item -Recurse -Force*": "deny",
+					"npm publish*": "deny",
+					"shutdown*": "deny",
+					"Stop-Computer*": "deny",
+					"Restart-Computer*": "deny",
+					"Format-Volume*": "deny",
+					"taskkill /F*": "deny",
+					"docker system prune*": "deny",
+					"terraform destroy*": "deny",
+					"kubectl delete*": "deny"
+				},
+				"plan_read": "deny",
+				"todoread": "deny"
+			}
+		},
+		// Code review — reads code, writes verdict, does NOT move tickets
+		"reviewer": {
+			"model": "openrouter/xiaomi/mimo-v2.5-pro",
+			"temperature": 0.1,
+			"reasoningEffort": "high",
+			"textVerbosity": "medium",
+			"mode": "subagent",
+			"prompt": "{file:./prompts/reviewer.md}",
+			"permission": {
+				"edit": "deny",
+				"write": "deny",
+				"bash": {
+					"*": "deny",
+					"backlog *": "allow",
+					"./scripts/check-board*": "allow",
+					"git diff*": "allow",
+					"git log*": "allow",
+					"git show*": "allow",
+					"git blame*": "allow",
+					"rg *": "allow"
+				},
+				"plan_read": "allow",
+				"delegation_read": "allow",
+				"delegation_list": "allow"
+			}
+		},
+		// Merge orchestrator — NEVER pushes, human pushes manually
+		"Merger-WS": {
+			"model": "openrouter/z-ai/glm-5.2",
+			"temperature": 0.2,
+			"reasoningEffort": "high",
+			"textVerbosity": "medium",
+			"prompt": "{file:./prompts/merger-ws.md}",
+			"permission": {
+				"edit": "deny",
+				"write": "deny",
+				"bash": {
+					"*": "deny",
+					"backlog *": "allow",
+					"./scripts/check-board*": "allow",
+					"./scripts/merge-task*": "allow",
+					"./scripts/done-task*": "allow",
+					"git diff*": "allow",
+					"git log*": "allow",
+					"git show*": "allow",
+					"git status*": "allow",
+					"git branch*": "allow",
+					"git show-ref*": "allow",
+					"git worktree*": "allow",
+					"git reset --hard*": "allow",
+					"rg *": "allow",
+					"git merge*": "deny",
+					"git merge --strategy=ours*": "deny",
+					"git merge -X ours*": "deny",
+					"git push*": "deny",
+					"git rebase*": "deny",
+					"git checkout*": "deny",
+					"git clean*": "deny",
+					"git stash*": "deny",
+					"git cherry-pick*": "deny",
+					"git tag*": "deny",
+					"git remote*": "deny",
+					"git fetch*": "deny",
+					"git pull*": "deny",
+					"git commit --amend*": "deny",
+					"git filter-branch*": "deny",
+					"git reflog*": "deny",
+					"git gc*": "deny",
+					"rm -rf*": "deny",
+					"Remove-Item -Recurse -Force*": "deny",
+					"npm publish*": "deny",
+					"shutdown*": "deny",
+					"Stop-Computer*": "deny",
+					"Format-Volume*": "deny",
+					"taskkill /F*": "deny",
+					"docker system prune*": "deny",
+					"terraform destroy*": "deny",
+					"kubectl delete*": "deny"
+				},
+				"prepmerge": "allow",
+				"get_diff_files_list": "allow",
+				"get_diff_file": "allow",
+				"question": "allow",
+				"plan_read": "allow",
+				"delegation_read": "allow",
+				"delegation_list": "allow"
+			}
+		},
+		// Specialists (no custom prompt — permissions only)
+		"explore": {
+			"model": "openrouter/xiaomi/mimo-v2.5-pro",
+			"temperature": 0.2,
+			"reasoningEffort": "low",
+			"textVerbosity": "low",
+			"permission": {
+				"edit": "deny",
+				"write": "deny",
+				"plan_read": "deny",
+				"todoread": "deny",
+				"bash": {
+					"*": "deny",
+					"ls *": "allow",
+					"tree *": "allow",
+					"pwd": "allow",
+					"cat *": "allow",
+					"head *": "allow",
+					"tail *": "allow",
+					"wc *": "allow",
+					"file *": "allow",
+					"stat *": "allow",
+					"grep *": "allow",
+					"rg *": "allow",
+					"find *": "allow",
+					"git status*": "allow",
+					"git log*": "allow",
+					"git diff*": "allow",
+					"git show*": "allow",
+					"git blame*": "allow",
+					"git branch*": "allow",
+					"git ls-files*": "allow",
+					"uname*": "allow",
+					"hostname": "allow",
+					"whoami": "allow",
+					"which *": "allow",
+					"realpath *": "allow"
+				}
+			}
+		},
+		"researcher": {
+			"model": "openrouter/xiaomi/mimo-v2.5-pro",
+			"temperature": 0.4,
+			"reasoningEffort": "high",
+			"textVerbosity": "medium",
+			"permission": {
+				"context7_*": "allow",
+				"exa_*": "allow",
+				"gh_grep_*": "allow",
+				"kagi_*": "deny",
+				"webfetch": "allow",
+				"write": "deny",
+				"edit": "deny",
+				"plan_read": "deny",
+				"todoread": "deny",
+				"bash": {
+					"*": "deny",
+					"gh repo view*": "allow",
+					"gh pr view*": "allow",
+					"gh pr list*": "allow",
+					"gh issue view*": "allow",
+					"gh issue list*": "allow",
+					"gh release view*": "allow",
+					"gh release list*": "allow",
+					"gh run view*": "allow",
+					"gh run list*": "allow",
+					"gh workflow list*": "allow",
+					"gh search *": "allow",
+					"gh api *": "allow",
+					"npm view*": "allow",
+					"npm info*": "allow",
+					"npm show*": "allow",
+					"pip show*": "allow",
+					"pip index*": "allow",
+					"cargo search*": "allow",
+					"cargo info*": "allow",
+					"man *": "allow",
+					"tldr *": "allow",
+					"dig *": "allow",
+					"nslookup *": "allow",
+					"whois *": "allow",
+					"host *": "allow",
+					"jq *": "allow",
+					"head *": "allow",
+					"tail *": "allow",
+					"base64 *": "allow",
+					"grep *": "allow",
+					"rg *": "allow",
+					"wc *": "allow",
+					"sort *": "allow",
+					"uniq *": "allow",
+					"cut *": "allow",
+					"awk *": "allow",
+					"tr *": "allow"
+				}
+			}
+		},
+		"scribe": {
+			"model": "openrouter/xiaomi/mimo-v2.5-pro",
+			"temperature": 1,
+			"reasoningEffort": "low",
+			"textVerbosity": "high",
+			"permission": {
+				"bash": {
+					"*": "deny"
+				},
+				"edit": "allow",
+				"glob": "allow",
+				"read": "allow",
+				"write": "allow",
+				"plan_read": "deny",
+				"todoread": "deny"
+			}
+		}
+	},
+	"permission": {
+		"task": "deny",
+		"context7_*": "deny",
+		"exa_*": "deny",
+		"gh_grep_*": "deny",
+		"kagi_*": "deny",
+		"webfetch": "deny",
+		"worktree_*": "deny",
+		"prepmerge": "allow",
+		"get_diff_files_list": "allow",
+		"get_diff_file": "allow"
+	},
+	"mcp": {
+		"context7": {
+			"type": "remote",
+			"url": "https://mcp.context7.com/mcp",
+			"enabled": true
+		},
+		"exa": {
+			"type": "remote",
+			"url": "https://mcp.exa.ai/mcp",
+			"enabled": true
+		},
+		"gh_grep": {
+			"type": "remote",
+			"url": "https://mcp.grep.app",
+			"enabled": true
+		}
+	},
+	"instructions": [
+		"./tools/philosophy.md",
+		"./tools/board-workflow.md"
+	],
+	"plugin": [
+		"@tarquinen/opencode-dcp@3.1.3",
+		"@franlol/opencode-md-table-formatter@0.0.6",
+		"./plugins/prepmerge.ts",
+		"./plugins/prepmerge_tui.tsx"
+	]
+}

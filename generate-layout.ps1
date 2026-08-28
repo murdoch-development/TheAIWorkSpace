@@ -4,23 +4,28 @@
 
 .DESCRIPTION
     Creates a .kdl layout file with:
-    - Plan tab (Plan-WS agent)
-    - One Build tab + one Board tab per repo (indexed: Build 1, Board 1, ...)
-    - Shell tab (plain shell)
+    - Plan tab (Plan-WS agent, in the chosen Plan repo)
+    - One Build tab + one Board tab + one Merge tab per repo (indexed: Build 1, Board 1, Merge 1, ...)
+    - Shell tab (plain shell, in the chosen Plan repo)
     - new_tab_template
 
-    Works with any number of repos. Each repo gets its own Build and Board tab.
-    Cross-platform: pane commands are emitted as `cmd /c ...` on Windows and as
-    direct invocations on macOS/Linux.
+    Works with any number of repos. Each repo gets its own Build, Board, and Merge
+    tab. Cross-platform: pane commands are emitted as `cmd /c ...` on Windows and
+    as direct invocations on macOS/Linux.
 
 .PARAMETER LayoutName
     Name of the layout (what you pass to: zellij --layout <name>).
 
 .PARAMETER Repos
-    Array of repo paths. Each gets a Build tab and a Backlog board tab.
+    Array of repo paths. Each gets a Build tab, a Backlog board tab, and a Merge tab.
 
 .PARAMETER ProfileName
     OpenCode profile to use in the layout. Defaults to "ws".
+
+.PARAMETER PlanRepoIndex
+    0-based index into $Repos for the repo that Plan-WS (and the Shell tab, and
+    the layout cwd) should run in. Defaults to 0 (first repo). Only meaningful
+    with multiple repos; setup-workspace.ps1 prompts for it in that case.
 
 .PARAMETER Force
     Overwrite existing layout without prompting.
@@ -37,6 +42,9 @@ param(
 
     [Parameter(Mandatory=$false)]
     [string]$ProfileName = "ws",
+
+    [Parameter(Mandatory=$false)]
+    [int]$PlanRepoIndex = 0,
 
     [switch]$Force
 )
@@ -126,6 +134,11 @@ for ($i = 0; $i -lt $Repos.Count; $i++) {
     }
 }
 
+if ($PlanRepoIndex -lt 0 -or $PlanRepoIndex -ge $Repos.Count) {
+    Write-Error "PlanRepoIndex ($PlanRepoIndex) is out of range. Repos has $($Repos.Count) entries (valid: 0-$($Repos.Count - 1))."
+    exit 1
+}
+
 $ZellijLayoutDir = Join-Path (Get-ZellijConfigDir) "layouts"
 $DestLayout = Join-Path $ZellijLayoutDir "$LayoutName.kdl"
 
@@ -146,21 +159,21 @@ if (Test-Path $DestLayout) {
 
 # === Build layout ===
 
-$firstRepoPath = Normalize-PathForKdl $Repos[0]
+$planRepoPath = Normalize-PathForKdl $Repos[$PlanRepoIndex]
 
 $L = [System.Collections.Generic.List[string]]::new()
 
 $L.Add("layout {")
-$L.Add("    cwd `"$firstRepoPath`"")
+$L.Add("    cwd `"$planRepoPath`"")
 
-# Tab: Plan (focus on open) — runs in the first repo's dir (where the board lives)
+# Tab: Plan (focus on open) — runs in the chosen Plan repo's dir (where its board lives)
 $L.Add("    tab name=`"Plan`" focus=true hide_floating_panes=true {")
 $L.AddRange([string[]](Get-TabBarBlock))
-$L.AddRange([string[]](Get-PaneBlock -Cwd $firstRepoPath -CommandArgs @("ocx", "oc", "-p", $ProfileName, "--agent", "Plan-WS")))
+$L.AddRange([string[]](Get-PaneBlock -Cwd $planRepoPath -CommandArgs @("ocx", "oc", "-p", $ProfileName, "--agent", "Plan-WS")))
 $L.AddRange([string[]](Get-StatusBarBlock))
 $L.Add("    }")
 
-# Tabs: one Build + one Board per repo (indexed)
+# Tabs: one Build + one Board + one Merge per repo (indexed, grouped by repo)
 for ($i = 0; $i -lt $Repos.Count; $i++) {
     $idx = $i + 1
     $repoPath = Normalize-PathForKdl $Repos[$i]
@@ -178,19 +191,19 @@ for ($i = 0; $i -lt $Repos.Count; $i++) {
     $L.AddRange([string[]](Get-PaneBlock -Cwd $repoPath -CommandArgs @("backlog", "board")))
     $L.AddRange([string[]](Get-StatusBarBlock))
     $L.Add("    }")
+
+    # Merge tab — one Merger-WS per repo (Merger-WS operates on the repo it's launched in)
+    $L.Add("    tab name=`"Merge $idx`" hide_floating_panes=true {")
+    $L.AddRange([string[]](Get-TabBarBlock))
+    $L.AddRange([string[]](Get-PaneBlock -Cwd $repoPath -CommandArgs @("ocx", "oc", "-p", $ProfileName, "--agent", "Merger-WS")))
+    $L.AddRange([string[]](Get-StatusBarBlock))
+    $L.Add("    }")
 }
 
-# Tab: Merge (in first repo's dir)
-$L.Add("    tab name=`"Merge`" hide_floating_panes=true {")
-$L.AddRange([string[]](Get-TabBarBlock))
-$L.AddRange([string[]](Get-PaneBlock -Cwd $firstRepoPath -CommandArgs @("ocx", "oc", "-p", $ProfileName, "--agent", "Merger-WS")))
-$L.AddRange([string[]](Get-StatusBarBlock))
-$L.Add("    }")
-
-# Tab: Shell (in first repo's dir)
+# Tab: Shell (in Plan repo's dir)
 $L.Add("    tab name=`"Shell`" hide_floating_panes=true {")
 $L.AddRange([string[]](Get-TabBarBlock))
-$L.Add("        pane cwd=`"$firstRepoPath`"")
+$L.Add("        pane cwd=`"$planRepoPath`"")
 $L.AddRange([string[]](Get-StatusBarBlock))
 $L.Add("    }")
 
@@ -215,7 +228,7 @@ Set-Content -LiteralPath $DestLayout -Value $layoutContent -NoNewline
 
 # === Report ===
 
-$tabCount = 3 + ($Repos.Count * 2)
+$tabCount = 2 + ($Repos.Count * 3)
 Write-Host ""
 Write-Host "  Layout: $LayoutName ($tabCount tabs)  [$OS]" -ForegroundColor Cyan
 Write-Host "  File:   $DestLayout" -ForegroundColor Gray
@@ -226,8 +239,8 @@ for ($i = 0; $i -lt $Repos.Count; $i++) {
     $idx = $i + 1
     Write-Host "    Build $idx            - Build orchestrator (Build-WS)" -ForegroundColor DarkGray
     Write-Host "    Board $idx            - Backlog.md board view" -ForegroundColor DarkGray
+    Write-Host "    Merge $idx            - Merge orchestrator (Merger-WS)" -ForegroundColor DarkGray
 }
-Write-Host "    Merge             - Merge orchestrator (Merger-WS)" -ForegroundColor DarkGray
 Write-Host "    Shell             - Shell" -ForegroundColor DarkGray
 Write-Host ""
 Write-Host "  Launch:  zellij --layout $LayoutName" -ForegroundColor Cyan

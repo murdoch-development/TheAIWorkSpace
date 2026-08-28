@@ -1,0 +1,63 @@
+THE AI WORKSPACE - QUICK START
+================================
+
+1. Extract this zip somewhere (e.g., Desktop or Downloads)
+
+2. Open PowerShell in the extracted folder:
+   - Right-click in the folder -> "Open in Terminal"
+   - Or: Open PowerShell, cd to the folder
+
+3. Run:
+   .\bootstrap.ps1
+
+4. Follow the prompts. It will (in order):
+   a. Fix PowerShell execution policy if needed (Windows)
+   b. Install any missing tools (git, node, bun, zellij, backlog, ocx, opencode)
+      - Already have some? No problem - it skips installed ones
+   c. Install the OpenCode "ws" profile (agents, skills, plugins)
+   d. Ask for your project name and repo paths
+   e. Set up each repo with workflow scripts and Backlog.md
+   f. Generate (or overwrite) a Zellij layout
+
+   NOTE: bootstrap runs with -Force, so re-running it is safe and won't
+   prompt before overwriting layouts, AGENTS.md, or workflow scripts. It
+   will still prompt for project name and repo paths.
+
+5. When done, launch:
+   zellij --layout <your-layout-name>
+
+6. Read README.md for the full guide.
+
+
+WHAT IF I ALREADY HAVE SOME TOOLS?
+====================================
+The installer checks each tool individually. If you already have
+git, node, bun, etc., it detects them and skips. No re-installs,
+no conflicts.
+
+
+WHAT IF I ALREADY HAVE AN OPENCODE PROFILE CALLED "ws"?
+=========================================================
+The bootstrap will ask before overwriting. You can keep your
+existing profile and just use the scripts.
+
+
+WHAT IF BUN WAS JUST INSTALLED AND THINGS FAIL?
+=================================================
+On Windows, freshly installed bun may not be on PATH in the
+current session. If you see errors about bun/ocx not found:
+
+1. Close this terminal
+2. Open a new one
+3. cd back to the extracted folder
+4. Run again: .\bootstrap.ps1
+
+It will skip already-installed tools and pick up where it left off.
+
+
+TROUBLESHOOTING
+===============
+- "scripts can't run" -> The bootstrap fixes this automatically on Windows
+- "bun not found after install" -> Restart terminal, re-run bootstrap.ps1
+- "zellij not found" -> See https://zellij.dev/documentation/installation
+- Other issues -> Read README.md troubleshooting section
