@@ -60,6 +60,21 @@ zips, and all text in macos/linux zips is LF-normalized. `package.sh` needs
 Version pins (OpenCode V1 line): `ocx@2.0.15` (frozen V1 client),
 `opencode-ai@1`, `backlog.md@1`.
 
+## Releases
+
+Releases are built by CI, not uploaded by hand. Pushing a tag (`v*`) triggers
+[`.github/workflows/release.yml`](.github/workflows/release.yml), which builds
+all 3 zips on an `ubuntu-latest` runner via `bash package.sh` and publishes
+them to a GitHub Release with generated notes:
+
+```
+git tag v1.0.0
+git push origin v1.0.0
+```
+
+Manual dispatch (Actions tab -> Release -> Run workflow) builds all 3 zips
+for validation, without publishing a release.
+
 ## Maintenance
 
 - After editing `profile/`, regenerate the bash copy and repackage:
