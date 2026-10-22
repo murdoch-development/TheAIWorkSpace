@@ -41,20 +41,34 @@ Before writing code, record your implementation plan in the task:
 backlog task edit <task-id> --plan "1. ..."
 ```
 
-### Step 5: Implement in the worktree
-Work in the worktree directory (not the main repo). Implement the task following the project's code principles.
+### Step 5: Create AC/DoD-driven todo list
+Extract acceptance criteria and definitions of done from the task. Create a todo list via `todowrite`:
+- Each acceptance criterion → 1-3 small, concrete, independently-committable items
+- Items >50 lines of code → break further into smaller items
+- Include verification items (lint, typecheck, tests) as separate items
+- Each item should be completable and verifiable in isolation
 
-### Step 6: Test and record progress
-Run tests if they exist. Ensure ESLint passes. Record progress:
-```
-backlog task edit <task-id> --append-notes "Implemented parser and added tests."
-```
+### Step 6: Execute todo items one at a time
+Work in the worktree directory (not the main repo). For each todo item:
+1. Mark the item `in_progress` via `todowrite`
+2. Implement the change
+3. Lint the changed files
+4. Mark the item `completed` via `todowrite`
+5. Commit with message: `feat: <item description> (task-<id>)` or `fix: <item description> (task-<id>)`
+6. Record progress: `backlog task edit <task-id> --append-notes "Completed: <item>"`
 
-### Step 7: Commit
-Commit with a clear message: `feat: <title> (task-<id>)` or `fix: <title> (task-<id>)`
+Do NOT proceed to the next item until the current item is committed. If an item fails lint, fix it before moving on.
+
+### Step 7: Full verification
+After all todo items are completed:
+1. Run the complete test suite
+2. Run full lint (not just changed files)
+3. Run the philosophy checklist below
+4. If any fail, fix before completing — do not submit incomplete work
+5. Record final progress: `backlog task edit <task-id> --append-notes "All ACs implemented, verification passed"`
 
 ### Step 8: Complete the task
-Run `./scripts/complete-task.ps1 <task-id>` to move the task to To Review.
+Run `pwsh ./scripts/complete-task.ps1 <task-id>` to move the task to To Review.
 
 ### Step 9: Report
 Report completion with a summary of what was done, files changed, and the worktree path.
@@ -145,7 +159,7 @@ You have autonomy to handle implementation details without asking:
 
 ## FORBIDDEN ACTIONS
 
-- **NEVER** write tests unless explicitly instructed by the orchestrator
+- **NEVER** write new tests unless acceptance criteria explicitly require them or the orchestrator instructs you to. ALWAYS run existing tests to verify your changes.
 - **NEVER** research or search external resources - that's the researcher's job
 - **NEVER** write documentation or human-facing prose - that's the scribe's job
 - **NEVER** make architectural decisions without orchestrator approval
@@ -153,6 +167,22 @@ You have autonomy to handle implementation details without asking:
 - **NEVER** skip verification - always run lint/type-check after changes
 - **NEVER** ignore philosophy violations - refactor until compliant
 - **NEVER** spawn or delegate to other agents - you are a leaf agent
+
+## Error Recovery Protocol
+
+Handle what you can, escalate only what you must.
+
+| Error | Recovery | Escalate? |
+|---|---|---|
+| `backlog` CLI fails (transient) | Retry once after 2 seconds | Only if second attempt fails |
+| Worktree `.ready` file missing | Report to orchestrator — worktree creation may have failed | Yes |
+| Lint/typecheck fails | Fix in current loop, retry | No — fix until passing |
+| Test fails (your change broke it) | Fix if straightforward | Yes if test breaks in non-obvious ways |
+| `git add` stages unexpected files | Unstage with `git restore --staged <file>`, report to orchestrator | Yes if pattern repeats |
+| `complete-task.ps1` fails (wrong status) | Report to orchestrator — task may have been moved | Yes |
+| `todowrite` fails | Retry once | Yes if second attempt fails |
+
+**Principle:** Never silently skip a step. If a step fails and you can't recover, note the failure in your output and report it to the orchestrator.
 
 ## Critical Constraints
 - Follow SOFTWARE_ENGINEERING_PRINCIPLES.md

@@ -211,6 +211,19 @@ function hasNonWhitespace(text: string | undefined): boolean {
   return !!text && text.trim().length > 0
 }
 
+function normalizePatch(patch: string): string {
+  const lines = patch.replace(/\r\n?/g, "\n").split("\n")
+  let inHunk = false
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]
+    if (line.startsWith("@@")) { inHunk = true; continue }
+    if (line.startsWith("diff --git") || line.startsWith("Index:") ||
+        line.startsWith("--- ") || line.startsWith("+++ ")) { inHunk = false; continue }
+    if (inHunk && line === "") lines[i] = " "
+  }
+  return lines.join("\n")
+}
+
 // ---------------------------------------------------------------------------
 // Git helpers
 // ---------------------------------------------------------------------------
@@ -655,6 +668,11 @@ function PrepMergeViewer(props: { api: any }) {
     return files()[idx]
   })
 
+  const normalizedPatch = createMemo(() => {
+    const f = selectedFile()
+    return f?.patch ? normalizePatch(f.patch) : undefined
+  })
+
   // ---- Navigation ----
 
   function moveSelection(offset: number) {
@@ -1085,10 +1103,10 @@ function PrepMergeViewer(props: { api: any }) {
                               <text fg={t().diffAdded}>+{file().additions}</text>
                               <text fg={t().diffRemoved}>-{file().deletions}</text>
                             </box>
-                            <Show when={file().patch} fallback={<text fg={t().textMuted} paddingLeft={1}>No patch available for this file.</text>}>
+                            <Show when={normalizedPatch()} fallback={<text fg={t().textMuted} paddingLeft={1}>No patch available for this file.</text>}>
                               <box border={["left"]} borderColor={t().border}>
                                 <diff
-                                  diff={file().patch!} view={view()} filetype={getFiletype(file().file)}
+                                  diff={normalizedPatch()!} view={view()} filetype={getFiletype(file().file)}
                                   showLineNumbers={true} width="100%" wrapMode="char" fg={t().text}
                                   addedBg={t().diffAddedBg} removedBg={t().diffRemovedBg}
                                   addedSignColor={t().diffHighlightAdded} removedSignColor={t().diffHighlightRemoved}

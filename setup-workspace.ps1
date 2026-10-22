@@ -15,7 +15,7 @@
     Each repo's AGENTS.md uses its own folder name as the title.
 
 .PARAMETER LayoutName
-    Zellij layout name (for: zellij --layout <name>). Defaults to a slug of ProjectName + "-dev".
+    Zellij layout name (for: zellij --config <full-config-path> --layout <name>). Defaults to a slug of ProjectName + "-dev".
 
 .PARAMETER Repos
     Array of repo paths to set up.
@@ -106,10 +106,13 @@ Clear-Host
 Write-Banner
 
 if (-not $ProjectName) {
-    Write-Host "    Project name (e.g., 'My App', 'PMDG Tablet'):" -ForegroundColor White
-    Write-Host "    > " -ForegroundColor Cyan -NoNewline
-    $ProjectName = Read-Host
-    if (-not $ProjectName) { Write-Error "Project name is required."; exit 1 }
+    while ($true) {
+        Write-Host "    Project name (e.g., 'My App', 'PMDG Tablet'):" -ForegroundColor White
+        Write-Host "    > " -ForegroundColor Cyan -NoNewline
+        $ProjectName = Read-Host
+        if ($ProjectName) { break }
+        Write-Host "      [X] Project name is required." -ForegroundColor Red
+    }
 }
 
 if (-not $LayoutName) {
@@ -268,8 +271,16 @@ foreach ($repo in $Repos) {
     Write-Host "     $repo\AGENTS.md" -ForegroundColor DarkGray
 }
 Write-Host ""
+$zellijConfigDir = if ($IsWindows -or $PSVersionTable.PSVersion.Major -lt 6) {
+    Join-Path $env:APPDATA "Zellij" "config"
+} else {
+    $xdg = $env:XDG_CONFIG_HOME
+    $base = if ($xdg) { $xdg } else { Join-Path $HOME ".config" }
+    Join-Path $base "zellij"
+}
+$configPath = Join-Path $zellijConfigDir "config-$LayoutName.kdl"
 Write-Host "  2. Launch:" -ForegroundColor White
-Write-Host "     zellij --layout $LayoutName" -ForegroundColor Cyan
+Write-Host "     zellij --config `"$configPath`" --layout $LayoutName" -ForegroundColor Cyan
 Write-Host ""
 Write-Host "  3. Agents available (oc -p $ProfileName):" -ForegroundColor White
 Write-Host "     /agent Plan-WS    -> creates tasks" -ForegroundColor DarkGray

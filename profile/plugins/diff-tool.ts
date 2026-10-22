@@ -4,6 +4,19 @@ import { parsePatch } from "diff"
 
 type Row = { left: string; right: string; leftMark: string; rightMark: string }
 
+function normalizePatch(patch: string): string {
+  const lines = patch.replace(/\r\n?/g, "\n").split("\n")
+  let inHunk = false
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]
+    if (line.startsWith("@@")) { inHunk = true; continue }
+    if (line.startsWith("diff --git") || line.startsWith("Index:") ||
+        line.startsWith("--- ") || line.startsWith("+++ ")) { inHunk = false; continue }
+    if (inHunk && line === "") lines[i] = " "
+  }
+  return lines.join("\n")
+}
+
 function buildRows(lines: string[]): Row[] {
   const rows: Row[] = []
   let i = 0
@@ -52,7 +65,7 @@ function buildRows(lines: string[]): Row[] {
 function renderSideBySide(patch: string, width: number): string {
   const GREEN = "\x1b[32m", RED = "\x1b[31m", CYAN = "\x1b[36m", BOLD = "\x1b[1m", DIM = "\x1b[2m", RESET = "\x1b[0m"
   const colWidth = Math.max(20, Math.floor((width - 4) / 2))
-  const parsed = parsePatch(patch)[0]
+  const parsed = parsePatch(normalizePatch(patch))[0]
   if (!parsed || !parsed.hunks) return patch
 
   const m = patch.match(/^diff --git a\/(\S+) b\/(\S+)/)

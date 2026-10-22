@@ -24,7 +24,7 @@ THE AI WORKSPACE - QUICK START
    will still prompt for project name and repo paths.
 
 5. When done, launch:
-   zellij --layout <your-layout-name>
+   zellij --config "$env:APPDATA\Zellij\config\config-<your-layout-name>.kdl" --layout <your-layout-name>
 
 6. Read README.md for the full guide.
 

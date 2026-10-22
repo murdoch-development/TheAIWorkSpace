@@ -4,7 +4,7 @@
 
 .DESCRIPTION
     Sets up a single repo with everything it needs to work with the ws profile:
-    - 9 workflow scripts in scripts/ (check-board, start-task, create-worktree, complete-task, approve-task, reject-task, read-verdict, merge-task, done-task)
+    - 11 workflow scripts in scripts/ (check-board, start-task, create-worktree, complete-task, approve-task, reject-task, read-verdict, write-verdict, sync-worktree, merge-task, done-task)
     - SOFTWARE_ENGINEERING_PRINCIPLES.md (SOLID, DRY, KISS, YAGNI, testing, lint rules)
     - Backlog.md initialization
     - Task templates in backlog/docs/
@@ -344,7 +344,14 @@ $scriptPath = $MyInvocation.MyCommand.Path
 $pwshPath = (Get-Process -Id $PID).Path
 if (-not $pwshPath) { $pwshPath = "pwsh" }
 
-$bgProc = Start-Process -FilePath $pwshPath -ArgumentList "-NoProfile -File `"$scriptPath`" -TaskId $TaskId -Background" -WorkingDirectory $RepoRoot -WindowStyle Hidden -PassThru
+$startArgs = @{
+    FilePath = $pwshPath
+    ArgumentList = "-NoProfile -File `"$scriptPath`" -TaskId $TaskId -Background"
+    WorkingDirectory = $RepoRoot
+    PassThru = $true
+}
+if ($IsWindows -or $PSVersionTable.PSVersion.Major -lt 6) { $startArgs["WindowStyle"] = "Hidden" }
+$bgProc = Start-Process @startArgs
 
 Set-Content -LiteralPath $PendingFile -Value "$($bgProc.Id)`n$((Get-Date -Format 'o'))" -NoNewline
 
@@ -610,6 +617,231 @@ if ($LASTEXITCODE -ne 0) { Write-Error "Failed to update $TaskId status."; exit 
 Write-Host ""
 Write-Host "TASK_REJECTED: $TaskId"
 Write-Host "STATUS: In Progress"
+'@
+    "write-verdict.ps1" = @'
+param(
+    [Parameter(Mandatory=$true, Position=0)][string]$TaskId,
+    [Parameter(Mandatory=$true, Position=1)][string]$Verdict,
+    [Parameter(Mandatory=$false, Position=2)][string]$Summary,
+    [Parameter(Mandatory=$false, Position=3)][string]$Issues,
+    [Parameter(Mandatory=$false, Position=4)][string]$Notes
+)
+$ErrorActionPreference = "Stop"
+if (-not (Get-Command backlog -ErrorAction SilentlyContinue)) {
+    Write-Error "Backlog.md CLI not found. Run install-deps.ps1 first."; exit 1
+}
+if ($TaskId -notmatch "^task-") { $TaskId = "task-$TaskId" }
+$Verdict = $Verdict.Trim().ToUpper()
+if ($Verdict -eq "APPROVE") { $Verdict = "APPROVED" }
+if ($Verdict -eq "REJECT") { $Verdict = "REJECTED" }
+if ($Verdict -ne "APPROVED" -and $Verdict -ne "REJECTED") {
+    Write-Error "Verdict must be 'approved' or 'rejected'. Got: $Verdict"; exit 1
+}
+$task = backlog task view $TaskId --plain 2>&1
+if ($LASTEXITCODE -ne 0) { Write-Error "Task $TaskId not found."; exit 1 }
+if (-not $Summary) { $Summary = "Review completed." }
+if (-not $Issues) { $Issues = "None" }
+if (-not $Notes) { $Notes = "None" }
+$comment = "<!-- VERDICT: $Verdict -->`n`n## Review`n- **Verdict**: $Verdict`n- **Summary**: $Summary`n- **Issues**: $Issues`n- **Notes**: $Notes"
+backlog task edit $TaskId --comment $comment --comment-author "reviewer" 2>&1
+if ($LASTEXITCODE -ne 0) { Write-Error "Failed to write verdict to task $TaskId."; exit 1 }
+Start-Sleep -Seconds 1
+$verify = backlog task view $TaskId --plain 2>&1
+if ($LASTEXITCODE -ne 0) { Write-Error "Failed to read task $TaskId back for verification."; exit 1 }
+$verifyText = $verify -join "`n"
+if ($verifyText -match "<!--\s*VERDICT:\s*$Verdict\s*-->") {
+    Write-Host "VERDICT_WRITTEN: $TaskId"
+    Write-Host "VERDICT: $Verdict"
+    Write-Host "STATUS: confirmed"
+    exit 0
+} else {
+    Write-Error "Verdict tag not found in task after writing. The comment may have failed silently."
+    exit 1
+}
+'@
+    "sync-worktree.ps1" = @'
+param(
+    [Parameter(Mandatory=$true, Position=0)][string]$TaskId,
+    [Parameter(Mandatory=$false)][string]$MergeTarget,
+    [switch]$DryRun
+)
+$ErrorActionPreference = "Stop"
+
+# === Pre-flight Check 1: Tool availability ===
+if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
+    Write-Error "Git not found."; exit 2
+}
+
+# === Pre-flight Check 2: Task ID normalization ===
+if ($TaskId -notmatch "^task-") { $TaskId = "task-$TaskId" }
+$BranchName = $TaskId
+
+# === Pre-flight Check 3: Repo root ===
+$RepoRoot = git rev-parse --show-toplevel 2>$null
+if (-not $RepoRoot) { Write-Error "Not in a git repo."; exit 2 }
+
+# === Pre-flight Check 4: Task exists ===
+if (-not (Get-Command backlog -ErrorAction SilentlyContinue)) {
+    if (-not $MergeTarget) {
+        Write-Error "Backlog.md CLI not found. Run install-deps.ps1 first, or pass -MergeTarget explicitly."; exit 2
+    }
+} else {
+    $task = & backlog task view $TaskId --plain 2>&1
+    if ($LASTEXITCODE -ne 0) { Write-Error "Task $TaskId not found."; exit 2 }
+}
+
+# === Pre-flight Check 5: MergeTarget extraction ===
+if ($MergeTarget) {
+    $mergeTarget = $MergeTarget.Trim()
+} else {
+    $taskText = ($task -join "`n")
+    $mergeTarget = $null
+    if ($taskText -match 'MergeTarget:\s*`([^`]+)`') {
+        $mergeTarget = $Matches[1].Trim()
+    }
+    if (-not $mergeTarget) {
+        Write-Error "Cannot determine merge target from ticket. The WORKTREE block is missing or malformed. Run create-worktree.ps1 to repair the ticket metadata, or pass -MergeTarget explicitly."; exit 2
+    }
+}
+
+# === Pre-flight Check 6: Worktree path ===
+$WorktreePath = Join-Path $RepoRoot "backlog" "worktrees" $TaskId
+if (-not (Test-Path $WorktreePath)) {
+    Write-Error "Worktree not found at $WorktreePath. Run create-worktree.ps1 first."; exit 2
+}
+if (-not (Test-Path (Join-Path $WorktreePath ".git"))) {
+    Write-Error "Worktree is broken (.git file missing). Run create-worktree.ps1 to repair, or remove it and recreate."; exit 2
+}
+
+# === Pre-flight Check 7: Task branch exists ===
+$null = git show-ref --verify --quiet "refs/heads/$BranchName" 2>$null
+if ($LASTEXITCODE -ne 0) { Write-Error "Branch $BranchName does not exist."; exit 2 }
+
+# === Pre-flight Check 8: MergeTarget branch exists ===
+$null = git show-ref --verify --quiet "refs/heads/$mergeTarget" 2>$null
+if ($LASTEXITCODE -ne 0) {
+    Write-Error "Merge target branch '$mergeTarget' does not exist locally. Run: git fetch origin && git branch $mergeTarget origin/$mergeTarget"; exit 2
+}
+
+# === Pre-flight Check 9: Not the same branch ===
+if ($BranchName -eq $mergeTarget) {
+    Write-Error "Cannot sync a branch into itself."; exit 2
+}
+
+# === Pre-flight Check 10: Worktree is clean ===
+# Filter out .ready (infrastructure marker from create-worktree.ps1) — not a source file
+Push-Location $WorktreePath
+try {
+    $dirty = git status --porcelain 2>$null | Where-Object { $_ -notmatch '\.ready\s*$' }
+} finally {
+    Pop-Location
+}
+if ($dirty) {
+    Write-Host "STATUS: error" -ForegroundColor Red
+    Write-Host "WORKTREE_PATH: $WorktreePath"
+    Write-Host "BRANCH: $BranchName"
+    Write-Host "MERGE_TARGET: $mergeTarget"
+    Write-Host ""
+    Write-Host "Worktree has uncommitted changes. Commit or stash them first, then re-run." -ForegroundColor Red
+    Write-Host "Refusing to merge to avoid polluting the merge with uncommitted work." -ForegroundColor Red
+    Write-Host ""
+    Write-Host "Dirty files:" -ForegroundColor DarkGray
+    Write-Host $dirty -ForegroundColor DarkGray
+    exit 1
+}
+
+# === Staleness Report ===
+$behindCommits = git log "$BranchName..$mergeTarget" --oneline 2>$null
+$behind = ($behindCommits | Where-Object { $_ } | Measure-Object).Count
+$aheadCommits = git log "$mergeTarget..$BranchName" --oneline 2>$null
+$ahead = ($aheadCommits | Where-Object { $_ } | Measure-Object).Count
+
+if ($behind -eq 0) {
+    Write-Host "STATUS: up-to-date"
+    Write-Host "WORKTREE_PATH: $WorktreePath"
+    Write-Host "BRANCH: $BranchName"
+    Write-Host "MERGE_TARGET: $mergeTarget"
+    Write-Host "BEHIND: 0"
+    Write-Host "AHEAD: $ahead"
+    Write-Host "MODE: none"
+    Write-Host ""
+    Write-Host "Nothing to sync — $TaskId is already up to date with $mergeTarget." -ForegroundColor Green
+    exit 0
+}
+
+if ($ahead -eq 0) {
+    $mode = "fast-forward"
+} else {
+    $mode = "merge-commit"
+}
+
+# Print report
+if ($DryRun) {
+    Write-Host "STATUS: dry-run"
+} else {
+    Write-Host "STATUS: syncing"
+}
+Write-Host "WORKTREE_PATH: $WorktreePath"
+Write-Host "BRANCH: $BranchName"
+Write-Host "MERGE_TARGET: $mergeTarget"
+Write-Host "BEHIND: $behind"
+Write-Host "AHEAD: $ahead"
+Write-Host "MODE: $mode"
+Write-Host ""
+
+if ($behind -gt 0) {
+    Write-Host "Incoming commits:" -ForegroundColor DarkGray
+    foreach ($line in $behindCommits) {
+        if ($line) { Write-Host "  $line" -ForegroundColor DarkGray }
+    }
+    Write-Host ""
+}
+
+if ($DryRun) {
+    Write-Host "No merge performed (--DryRun). Run without -DryRun to sync." -ForegroundColor Yellow
+    exit 0
+}
+
+# === The Merge ===
+Write-Host "Syncing $TaskId with $mergeTarget..." -ForegroundColor Cyan
+
+Push-Location $WorktreePath
+try {
+    git merge $mergeTarget 2>&1
+    $mergeExit = $LASTEXITCODE
+} finally {
+    Pop-Location
+}
+
+if ($mergeExit -ne 0) {
+    # Check for conflicts
+    $conflicts = git -C $WorktreePath diff --name-only --diff-filter=U 2>$null
+    if ($conflicts) {
+        Write-Host "STATUS: conflict" -ForegroundColor Red
+        Write-Host "CONFLICTS: $($conflicts -join ', ')" -ForegroundColor Red
+        Write-Host ""
+        Write-Host "Conflicts detected. Resolve them in the worktree, then:" -ForegroundColor Red
+        Write-Host "  cd $WorktreePath"
+        Write-Host "  git add <resolved-files>"
+        Write-Host "  git commit"
+        Write-Host "Or to abort: git merge --abort"
+        exit 1
+    }
+    Write-Host "STATUS: error" -ForegroundColor Red
+    Write-Host "Merge failed (exit $mergeExit) for non-conflict reasons." -ForegroundColor Red
+    exit 2
+}
+
+# === Success Reporting ===
+$newHead = git -C $WorktreePath rev-parse --short HEAD 2>$null
+Write-Host "Synced $TaskId with $mergeTarget" -ForegroundColor Green
+if ($mode -eq "fast-forward") {
+    Write-Host "Fast-forwarded (no merge commit)" -ForegroundColor DarkGray
+}
+Write-Host "MERGE_RESULT: success"
+Write-Host "COMMIT: $newHead"
+Write-Host "SYNCED_AT: $(Get-Date -Format 'o')"
+exit 0
 '@
 }
 
@@ -1034,7 +1266,7 @@ Write-Host "  Verifying setup..." -ForegroundColor Cyan
 $verifyOK = $true
 
 # Verify scripts
-$expectedScripts = @("check-board.ps1", "start-task.ps1", "create-worktree.ps1", "complete-task.ps1", "approve-task.ps1", "reject-task.ps1", "read-verdict.ps1", "merge-task.ps1", "done-task.ps1")
+$expectedScripts = @("check-board.ps1", "start-task.ps1", "create-worktree.ps1", "complete-task.ps1", "approve-task.ps1", "reject-task.ps1", "read-verdict.ps1", "write-verdict.ps1", "sync-worktree.ps1", "merge-task.ps1", "done-task.ps1")
 foreach ($s in $expectedScripts) {
     $spath = Join-Path $RepoPath "scripts" $s
     if (-not (Test-Path $spath)) {

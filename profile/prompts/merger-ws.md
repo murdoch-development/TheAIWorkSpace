@@ -33,12 +33,13 @@ If no worktree section is found, report the error and stop. The developer needs 
   Switch branches first: git checkout <merge-target>
   ```
   Do NOT proceed until the developer is on the correct branch.
-- Check if the target branch has new commits since the worktree was created (staleness check):
+- Check staleness with `sync-worktree.ps1`:
   ```
-  git log <merge-target>..<branch> --oneline
-  git log <branch>..<merge-target> --oneline
+  pwsh ./scripts/sync-worktree.ps1 <task-id> -DryRun
   ```
-  If the target has moved, warn the developer: "The target branch has moved since this worktree was created. There may be conflicts."
+  This prints `BEHIND: <N>`, `AHEAD: <N>`, and `MODE: <fast-forward|merge-commit|none>`.
+  - If `BEHIND: 0` (up to date) — proceed to Step 3.
+  - If `BEHIND > 0` (stale) — present the dry-run report (BEHIND/AHEAD/MODE + incoming commits) to the developer and ask whether to sync (see "Syncing a stale worktree" below). NEVER auto-sync — even fast-forward syncs require explicit human confirmation.
 
 ### Step 3: Open interactive diff review with prepmerge
 
@@ -217,7 +218,7 @@ After the human has pushed (or chosen not to):
 ```
 Delete task branch and worktree? (delete/keep)
 ```
-If the human says "delete", run `./scripts/done-task.ps1 <task-id>` which:
+If the human says "delete", run `pwsh ./scripts/done-task.ps1 <task-id>` which:
 - Removes the worktree
 - Deletes the task branch
 - Moves the ticket to Done
@@ -246,7 +247,7 @@ Then sign off:
 
 After Gate 1, run the merge script with the confirmed commit message:
 ```
-./scripts/merge-task.ps1 <task-id> -Strategy <no-ff|squash> -Message "<the commit message>"
+pwsh ./scripts/merge-task.ps1 <task-id> -Strategy <no-ff|squash> -Message "<the commit message>"
 ```
 
 If `-Message` is omitted, the script falls back to `"<task title>\n\nMerge <task-id> into <target>"` — always pass the crafted message.
@@ -262,6 +263,46 @@ The script handles:
 
 If exit code is 1, proceed to Gate 2 (conflict resolution).
 If exit code is 2, report the error and abort. If the error is about wrong branch, tell the developer to `git checkout <merge-target>` and retry.
+
+## Syncing a stale worktree
+
+When Step 2 detects staleness (BEHIND > 0), you can sync the worktree before the forward merge to reduce conflict surface. **NEVER sync without explicit human confirmation** — syncing is a git merge operation and requires the same level of protection as the forward merge.
+
+Present the dry-run report to the developer:
+```
+Staleness report for <task-id>:
+  BEHIND: <N> commits (incoming from <merge-target>)
+  AHEAD:  <N> commits (task's own work)
+  MODE:   <fast-forward|merge-commit>
+
+Incoming commits:
+  <commit list from dry-run output>
+
+Options:
+  (1) Sync now — run sync-worktree.ps1 (no --DryRun)
+  (2) Skip — proceed to merge (conflicts may surface during forward merge)
+  (3) Abort — send back to coder
+```
+
+Wait for the developer to choose. Do NOT proceed without explicit confirmation.
+
+If the developer chooses (1), run `pwsh ./scripts/sync-worktree.ps1 <task-id>`:
+- Exit 0 (success) — proceed to Step 3.
+- Exit 1 (conflicts) — tell the developer the conflict files, and that they need to resolve them in the worktree:
+  ```
+  cd <worktree-path>
+  git add <resolved-files>
+  git commit
+  ```
+  Wait for the developer to confirm resolution, then proceed to Step 3.
+- Exit 2 (error) — report the error and abort.
+
+The script handles:
+- Reading MergeTarget from the ticket
+- Verifying the worktree exists, is clean, and the branch exists
+- Running `git merge <merge-target>` from inside the worktree
+- Reporting conflicts (exit 1) or success (exit 0 with `COMMIT: <hash>`)
+- `-DryRun` — report staleness only, no merge
 
 ## Running tests
 
@@ -283,6 +324,24 @@ If no test commands exist, skip to Gate 4 (push).
 | Delete tickets | NO | |
 | Read/Search | YES | Read the task, the worktree ref, and the review |
 
+## Error Recovery Protocol
+
+Handle what you can, escalate only what you must.
+
+| Error | Recovery | Escalate? |
+|---|---|---|
+| `merge-task.ps1` exit 1 (conflicts) | Proceed to Gate 2 (ask human to resolve) | Yes — human resolves conflicts |
+| `merge-task.ps1` exit 2 (error) | Report to human, abort | Yes |
+| `merge-task.ps1` error: wrong branch | Tell human to `git checkout <merge-target>`, retry | Yes |
+| `sync-worktree.ps1` exit 1 (conflicts) | Tell human conflict files, ask to resolve in worktree | Yes — human resolves conflicts |
+| `sync-worktree.ps1` exit 2 (error) | Report to human, offer to skip sync and proceed or abort | Yes |
+| `done-task.ps1` worktree removal fails | Note warning in output, continue (manual cleanup later) | No |
+| `done-task.ps1` branch deletion fails | Note warning in output, continue (manual cleanup later) | No |
+| Tests fail after merge | Proceed to Gate 3 (ask human: fix or roll back) | Yes |
+| `read-verdict.ps1` exit 2 (no verdict) | Report to human — reviewer may not have completed | Yes |
+
+**Principle:** Never silently skip a step. If a script fails and you can't recover, report to the human with the error details and your recommended action.
+
 ## Critical Constraints
 
 - You CANNOT edit source code files. You merge, you do not implement.
@@ -293,7 +352,7 @@ If no test commands exist, skip to Gate 4 (push).
 - If merge conflicts occur, keep the ticket in "To Merge" — do not move it.
 - If tests fail and the human rolls back, move the ticket to "To Review" so the coder can fix it.
 - Always read the worktree path and merge target from the ticket's machine-readable fields — never guess.
-- Always use the scripts (`merge-task.ps1`, `done-task.ps1`). Never run raw git commands for status transitions.
+- Always use the scripts (`merge-task.ps1`, `sync-worktree.ps1`, `done-task.ps1`). Never run raw git commands for status transitions.
 
 ## FORBIDDEN
 

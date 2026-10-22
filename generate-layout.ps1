@@ -1,20 +1,30 @@
 <#
 .SYNOPSIS
-    Generates a Zellij layout for any set of repos using the "ws" OpenCode profile.
+    Generates a Zellij layout and ws config for any set of repos using the "ws" OpenCode profile.
 
 .DESCRIPTION
-    Creates a .kdl layout file with:
-    - Plan tab (Plan-WS agent, in the chosen Plan dir)
-    - One Build tab + one Board tab + one Merge tab per repo (indexed: Build 1, Board 1, Merge 1, ...)
-    - Shell tab (plain shell, in the chosen Plan dir)
-    - new_tab_template
+    Creates two files:
+    1. <layout-name>.kdl - Zellij layout with:
+       - Plan tab (Plan-WS agent, in the chosen Plan dir)
+       - One Build tab + one Board tab + one Merge tab per repo (indexed: Build 1, Board 1, Merge 1, ...)
+       - Shell tab (plain shell, in the chosen Plan dir)
+       - new_tab_template
+    2. config-<layout-name>.kdl - Zellij config with a "duplicate tab" keybind
+       (a = duplicate focused tab). Generated from config-ws.kdl template by
+       replacing {{WS_KEYBINDS}} with the keybind.
+
+    The keybind uses the Run action (floating pane, close-on-exit) to call
+    new-build-agent.ps1 (no params) in the source tab. The script reads the
+    source tab's cwd + name, creates a new tab via "zellij action new-tab"
+    with the same cwd, name "SourceName.N", and the same agent command,
+    then moves it next to the source via "move-tab -t".
 
     Works with any number of repos. Each repo gets its own Build, Board, and Merge
     tab. Cross-platform: pane commands are emitted as `cmd /c ...` on Windows and
     as direct invocations on macOS/Linux.
 
 .PARAMETER LayoutName
-    Name of the layout (what you pass to: zellij --layout <name>).
+    Name of the layout (what you pass to: zellij --config <full-config-path> --layout <name>).
 
 .PARAMETER Repos
     Array of repo paths. Each gets a Build tab, a Backlog board tab, and a Merge tab.
@@ -214,12 +224,12 @@ $L.Add("    new_tab_template {")
 $L.AddRange([string[]](Get-TabBarBlock))
 $L.Add("        pane")
 $L.AddRange([string[]](Get-StatusBarBlock))
-$L.Add("    }")
+    $L.Add("    }")
 
-# Close the layout block
-$L.Add("}")
+    # Close the layout block
+    $L.Add("}")
 
-# === Write + Report ===
+# === Write layout ===
 
 if (-not (Test-Path $ZellijLayoutDir)) {
     New-Item -ItemType Directory -Path $ZellijLayoutDir -Force | Out-Null
@@ -227,6 +237,42 @@ if (-not (Test-Path $ZellijLayoutDir)) {
 
 $layoutContent = ($L -join "`n")
 Set-Content -LiteralPath $DestLayout -Value $layoutContent -NoNewline
+
+# === Generate config-<layout>.kdl (from config-ws.kdl template with duplicate-tab keybind) ===
+
+$scriptPath = Normalize-PathForKdl (Join-Path (Get-ZellijConfigDir) "scripts" "new-build-agent.ps1")
+
+$keybindLines = [System.Collections.Generic.List[string]]::new()
+$keybindLines.Add("        bind `"a`" {")
+$keybindLines.Add("            Run `"pwsh`" `"-NoProfile`" `"-File`" `"$scriptPath`" {")
+$keybindLines.Add("                floating true")
+$keybindLines.Add("                close_on_exit true")
+$keybindLines.Add("            }")
+$keybindLines.Add("            SwitchToMode `"normal`"")
+$keybindLines.Add("        }")
+$keybindKdl = ($keybindLines -join "`n")
+
+$templatePath = Join-Path $PSScriptRoot "config-ws.kdl"
+if (-not (Test-Path $templatePath)) {
+    $templatePath = Join-Path (Get-ZellijConfigDir) "config-ws.kdl"
+}
+if (-not (Test-Path $templatePath)) {
+    Write-Error "config-ws.kdl template not found. Run bootstrap.ps1 to install it."
+    exit 1
+}
+$template = Get-Content $templatePath -Raw
+if ($template -notmatch '\{\{WS_KEYBINDS\}\}') {
+    Write-Error "config-ws.kdl template does not contain {{WS_KEYBINDS}} placeholder."
+    exit 1
+}
+$configContent = $template -replace '(?m)^\s*// \{\{WS_KEYBINDS\}\}', $keybindKdl
+
+# Fix default_shell for the target OS (template defaults to pwsh.exe for Windows)
+$shellName = if ($IsWin) { "pwsh.exe" } else { "pwsh" }
+$configContent = $configContent -replace 'default_shell\s+"[^"]*"', "default_shell `"$shellName`""
+
+$destConfig = Join-Path (Get-ZellijConfigDir) "config-$LayoutName.kdl"
+Set-Content -LiteralPath $destConfig -Value $configContent -NoNewline
 
 # === Report ===
 
@@ -245,5 +291,12 @@ for ($i = 0; $i -lt $Repos.Count; $i++) {
 }
 Write-Host "    Shell             - Shell" -ForegroundColor DarkGray
 Write-Host ""
-Write-Host "  Launch:  zellij --layout $LayoutName" -ForegroundColor Cyan
+Write-Host "  Config: config-$LayoutName.kdl" -ForegroundColor White
+Write-Host "    File:  $destConfig" -ForegroundColor Gray
+Write-Host ""
+Write-Host "  Keybinds (Ctrl+t mode):" -ForegroundColor White
+Write-Host "    a  - Duplicate focused tab (same cwd + agent, name.N)" -ForegroundColor DarkGray
+Write-Host "    n  - New plain tab" -ForegroundColor DarkGray
+Write-Host ""
+Write-Host "  Launch:  zellij --config `"$destConfig`" --layout $LayoutName" -ForegroundColor Cyan
 Write-Host ""

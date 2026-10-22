@@ -12,13 +12,14 @@ All scripts are in `scripts/` and must be used (never manually edit task files):
 
 | Script | Purpose |
 |---|---|
-| `scripts/check-board.ps1` | List tasks by status. Usage: `./scripts/check-board.ps1 "To Do"` |
+| `scripts/check-board.ps1` | List tasks by status. Usage: `pwsh ./scripts/check-board.ps1 "To Do"` |
 | `scripts/start-task.ps1` | Move task to In Progress (guard: must be "To Do") |
 | `scripts/create-worktree.ps1` | Create a git worktree for a task + write worktree ref to ticket |
 | `scripts/complete-task.ps1` | Move task to To Review (guard: must be "In Progress") |
 | `scripts/approve-task.ps1` | Move task to To Merge (guard: must be "To Review") |
 | `scripts/reject-task.ps1` | Move task back to In Progress (guard: must be "To Review") |
 | `scripts/read-verdict.ps1` | Deterministically parse VERDICT tag (exit: 0=approved, 1=rejected, 2=not found) |
+| `scripts/write-verdict.ps1` | Write VERDICT tag with self-verification (exit: 0=confirmed, 1=failed) — used by reviewer |
 | `scripts/merge-task.ps1` | Perform the actual git merge (exit: 0=success, 1=conflicts, 2=error) |
 | `scripts/done-task.ps1` | Move task to Done + remove worktree + delete branch (guard: must be "To Merge") |
 
@@ -29,7 +30,7 @@ All scripts are in `scripts/` and must be used (never manually edit task files):
 | **Plan-WS** | Takes user requests -> creates tasks on the board | Create, Edit, Read |
 | **Build-WS** | Creates worktree -> delegates to coder -> spawns reviewer -> reads VERDICT via script -> moves tickets | Move only, Read |
 | **coder** | Implements in pre-created worktree -> commits -> moves to To Review | Edit (append), Read |
-| **reviewer** | Reads worktree ref -> reviews code -> writes VERDICT tag into task | Edit (append), Read — does NOT move tickets |
+| **reviewer** | Reads worktree ref -> reviews code -> writes VERDICT tag via `write-verdict.ps1` | Read, Skill, Edit (via script only) — does NOT move tickets |
 | **Merger-WS** | Walks developer through merge process with diff review, human decision gates, git merge, cleanup | Move (To Merge -> Done), Read |
 | **scribe** | Writes documentation when delegated | Read only |
 | **explore** | Reads codebase when delegated | Read only |
@@ -53,7 +54,7 @@ User: "Fix CFuel null pointer"
   -> coder implements in worktree, commits
   -> coder runs complete-task.ps1 task-001 (-> To Review)
   -> Build-WS spawns reviewer with task ID
-  -> reviewer reads worktree ref from ticket, reviews code, writes <!-- VERDICT: APPROVED --> into task
+  -> reviewer reads worktree ref from ticket, reviews code, writes <!-- VERDICT: APPROVED --> via write-verdict.ps1
   -> reviewer does NOT move the ticket — reports back to Build-WS
   -> Build-WS runs read-verdict.ps1 task-001 (exit 0 = APPROVED)
   -> Build-WS runs approve-task.ps1 task-001 (-> To Merge)

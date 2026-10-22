@@ -13,3 +13,6 @@ bun.lock
 # OS junk
 .DS_Store
 Thumbs.db
+
+# Local progress log
+Progress.md

@@ -1,0 +1,4 @@
+# Bash tree must stay LF (macOS ships bash 3.2; CRLF .sh breaks it)
+unix/** text eol=lf
+*.sh text eol=lf
+*.kdl text eol=lf
